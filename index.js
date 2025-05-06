@@ -77,3 +77,28 @@ app.post('/webhook/fourthwall', async (req, res) => {
 });
 
 
+app.get('/check-membership', async (req, res) => {
+  const email = req.query.email?.toLowerCase();
+
+  if (!email) return res.status(400).json({ error: 'Missing email parameter' });
+
+  try {
+    const { data, error } = await supabase
+      .from('members')
+      .select('tier, active')
+      .eq('email', email)
+      .single();
+
+    if (error || !data) {
+      return res.status(404).json({ active: false, tier: null });
+    }
+
+    return res.json({
+      active: data.active,
+      tier: data.tier
+    });
+  } catch (err) {
+    console.error('❌ Error checking membership:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
