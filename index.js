@@ -4,6 +4,7 @@ import bodyParser from 'body-parser';
 import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
+import supabase from './supabaseClient.js';
 
 const MEMBERS_FILE = path.resolve('members.json');
 
@@ -35,31 +36,44 @@ app.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
 
-app.post('/webhook/fourthwall', (req, res) => {
+
+app.post('/webhook/fourthwall', async (req, res) => {
   const { type, data } = req.body;
   const email = data?.customer?.email?.toLowerCase();
 
   if (!email) return res.sendStatus(400);
 
-  const members = loadMembers();
+  try {
+    if (['membership.created', 'membership.updated'].includes(type)) {
+      const { error } = await supabase
+        .from('members')
+        .upsert({
+          email,
+          tier: data.tier?.name || '',
+          active: data.active ?? true
+        }, { onConflict: 'email' });
 
-  if (['membership.created', 'membership.updated'].includes(type)) {
-    members[email] = {
-      tier: data.tier?.name || '',
-      active: data.active ?? true,
-      updated: new Date().toISOString()
-    };
-    saveMembers(members);
-    console.log(`✅ Stored membership: ${email} (${data.tier?.name})`);
-  } else if (type === 'membership.cancelled') {
-    if (members[email]) {
-      members[email].active = false;
-      members[email].updated = new Date().toISOString();
-      saveMembers(members);
-      console.log(`❌ Cancelled membership: ${email}`);
+      if (error) throw error;
+
+      console.log(`✅ Supabase: stored ${email} (${data.tier?.name})`);
     }
-  }
 
-  res.sendStatus(200);
+    if (type === 'membership.cancelled') {
+      const { error } = await supabase
+        .from('members')
+        .update({ active: false })
+        .eq('email', email);
+
+      if (error) throw error;
+
+      console.log(`❌ Supabase: cancelled ${email}`);
+    }
+
+    res.sendStatus(200);
+  } catch (err) {
+    console.error('❌ Supabase error:', err.message);
+    res.sendStatus(500);
+  }
 });
+
 
