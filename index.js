@@ -2,6 +2,19 @@ import express from 'express';
 import cors from 'cors';
 import bodyParser from 'body-parser';
 import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
+
+const MEMBERS_FILE = path.resolve('members.json');
+
+function loadMembers() {
+  if (!fs.existsSync(MEMBERS_FILE)) return {};
+  return JSON.parse(fs.readFileSync(MEMBERS_FILE, 'utf-8'));
+}
+
+function saveMembers(data) {
+  fs.writeFileSync(MEMBERS_FILE, JSON.stringify(data, null, 2));
+}
 
 dotenv.config();
 
@@ -23,32 +36,30 @@ app.listen(port, () => {
 });
 
 app.post('/webhook/fourthwall', (req, res) => {
-  const event = req.body;
+  const { type, data } = req.body;
+  const email = data?.customer?.email?.toLowerCase();
 
-  console.log('🔔 Webhook received from Fourthwall:', event?.type);
-  
-  if (!event || !event.type || !event.data) {
-    return res.status(400).send('Invalid webhook payload');
-  }
+  if (!email) return res.sendStatus(400);
 
-  // Handle membership events
-  const { type, data } = event;
+  const members = loadMembers();
 
-  switch (type) {
-    case 'membership.created':
-    case 'membership.updated':
-      console.log(`✅ Membership active: ${data.customer.email} (${data.tier?.name})`);
-      // TODO: Save or update membership in your DB
-      break;
-
-    case 'membership.cancelled':
-      console.log(`❌ Membership cancelled: ${data.customer.email}`);
-      // TODO: Remove/flag access in your DB
-      break;
-
-    default:
-      console.log(`ℹ️ Unhandled event type: ${type}`);
+  if (['membership.created', 'membership.updated'].includes(type)) {
+    members[email] = {
+      tier: data.tier?.name || '',
+      active: data.active ?? true,
+      updated: new Date().toISOString()
+    };
+    saveMembers(members);
+    console.log(`✅ Stored membership: ${email} (${data.tier?.name})`);
+  } else if (type === 'membership.cancelled') {
+    if (members[email]) {
+      members[email].active = false;
+      members[email].updated = new Date().toISOString();
+      saveMembers(members);
+      console.log(`❌ Cancelled membership: ${email}`);
+    }
   }
 
   res.sendStatus(200);
 });
+
