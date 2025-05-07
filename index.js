@@ -38,52 +38,49 @@ app.listen(port, () => {
 });
 
 
-app.post('/webhook/fourthwall', async (req, res) => {
-  const { type, data } = req.body;
-  const email = data?.customer?.email?.toLowerCase();
-  console.log('[Webhook] 🔍 Full payload:', JSON.stringify(req.body, null, 2));
 
-  if (!email) return res.sendStatus(400);
 
-  try {
-    if (['membership.created', 'membership.updated'].includes(type)) {
-      const { error } = await supabase
-        .from('members')
-        .upsert({
-          email,
-          tier: data.tier?.name || '',
-          active: data.active ?? true
-        }, { onConflict: 'email' });
-
-      if (error) throw error;
-
-      console.log(`✅ Supabase: stored ${email} (${data.tier?.name})`);
-    }
-
-    if (type === 'membership.cancelled') {
-      const { error } = await supabase
-        .from('members')
-        .update({ active: false })
-        .eq('email', email);
-
-      if (error) throw error;
-
-      console.log(`❌ Supabase: cancelled ${email}`);
-    }
-
-    res.sendStatus(200);
-  } catch (err) {
-    console.error('❌ Supabase error:', err.message);
-    res.sendStatus(500);
-  }
-});
 
 
 app.get('/check-membership', async (req, res) => {
   const email = req.query.email?.toLowerCase();
 
   if (!email) return res.status(400).json({ error: 'Missing email parameter' });
-
+  app.post('/webhook/fourthwall', async (req, res) => {
+    const payload = req.body;
+    console.log('[Webhook] 🔍 Full payload:', JSON.stringify(payload, null, 2));
+  
+    const email = payload?.data?.email?.toLowerCase();
+    const tierId = payload?.data?.subscription?.variant?.tierId || 'unknown';
+    const interval = payload?.data?.subscription?.variant?.interval || 'MONTHLY';
+    const isActive = payload?.data?.subscription?.type === 'ACTIVE';
+  
+    // Approximate renewal date
+    const renewDate = new Date();
+    if (interval === 'MONTHLY') renewDate.setMonth(renewDate.getMonth() + 1);
+    if (interval === 'YEARLY') renewDate.setFullYear(renewDate.getFullYear() + 1);
+    const formattedRenewDate = renewDate.toISOString().split('T')[0];
+  
+    if (!email) return res.status(400).send('Missing email');
+  
+    const { error } = await supabase.from('members').upsert(
+      {
+        email,
+        tier: tierId, // optionally map this to "Pro" / "Elite"
+        active: isActive,
+        renew_date: formattedRenewDate,
+      },
+      { onConflict: 'email' }
+    );
+  
+    if (error) {
+      console.error('[Webhook] ❌ Supabase error:', error);
+      return res.status(500).send('Supabase error');
+    }
+  
+    res.sendStatus(200);
+  });
+  
   try {
     const { data, error } = await supabase
       .from('members')
@@ -136,50 +133,94 @@ app.post('/send-code', async (req, res) => {
 
 app.post('/verify-code', async (req, res) => {
   const { email, code } = req.body;
+
   if (!email || !code) {
     return res.status(400).json({ success: false, error: 'Missing email or code' });
   }
 
-  const codes = global.codes || {};
-  const record = codes[email.toLowerCase()];
-
-  if (!record) {
-    return res.status(400).json({ success: false, error: 'No code found for this email' });
+  const expected = verificationCodes[email];
+  if (!expected || expected.code !== code || Date.now() > expected.expiresAt) {
+    return res.status(401).json({ success: false, error: 'Invalid or expired code' });
   }
 
-  if (Date.now() > record.expires) {
-    delete codes[email.toLowerCase()];
-    return res.status(400).json({ success: false, error: 'Code has expired' });
+  console.log(`[Verify Code] 🔑 Verifying code for ${email}`);
+
+  // Try to fetch from Supabase first
+  const { data: member, error } = await supabase
+    .from('members')
+    .select('tier, active, created_at')
+    .eq('email', email)
+    .single();
+
+  if (error && error.code !== 'PGRST116') {
+    console.error('[Verify Code] ❌ Supabase error:', error);
+    return res.status(500).json({ success: false, error: 'Supabase error' });
   }
 
-  if (record.code !== code) {
-    return res.status(400).json({ success: false, error: 'Invalid code' });
-  }
-
-  // ✅ Lookup membership info from Supabase
-  try {
-    const { data: member, error } = await supabase
-      .from('members')
-      .select('tier, renew_date')
-      .eq('email', email.toLowerCase())
-      .single();
-
-    if (error || !member) {
-      console.error('[Verify Code] ❌ Supabase error:', error);
-      return res.status(200).json({ success: true, email, tier: 'Pro', renew_date: 'Unknown' }); // fallback
-    }
-
-    console.log(`[Verify Code] ✅ Verified ${email} — Tier: ${member.tier}, Renew: ${member.renew_date}`);
+  if (member) {
+    const renewDate = new Date(member.created_at);
+    renewDate.setMonth(renewDate.getMonth() + 1); // Assuming 1 month membership for now
 
     return res.json({
       success: true,
       email,
-      tier: member.tier,
-      renew_date: member.renew_date,
+      level: member.tier,
+      renewDate: renewDate.toISOString().split('T')[0],
+    });
+  }
+
+  // Fallback to Fourthwall API
+  const username = process.env.FOURTHWALL_API_USER;
+  const password = process.env.FOURTHWALL_API_PASS;
+  const authHeader = 'Basic ' + Buffer.from(`${username}:${password}`).toString('base64');
+
+  try {
+    const fwRes = await fetch(
+      `https://api.fourthwall.com/open-api/v1/customers?email=${encodeURIComponent(email)}`,
+      {
+        headers: {
+          Authorization: authHeader,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    const fwData = await fwRes.json();
+
+    if (!fwData?.data || fwData.data.length === 0) {
+      return res.status(404).json({ success: false, error: 'User not found in Fourthwall' });
+    }
+
+    const customer = fwData.data[0];
+    const tier = customer.subscription?.variant?.tierName ?? 'Pro';
+    const interval = customer.subscription?.variant?.interval ?? 'MONTHLY';
+    const createdAt = new Date(customer.subscription?.createdAt ?? Date.now());
+
+    let renewDate = new Date(createdAt);
+    if (interval === 'MONTHLY') renewDate.setMonth(renewDate.getMonth() + 1);
+    else if (interval === 'YEARLY') renewDate.setFullYear(renewDate.getFullYear() + 1);
+
+    // Optionally insert to Supabase
+    await supabase.from('members').insert([
+      {
+        email,
+        tier,
+        active: true,
+        created_at: new Date().toISOString(),
+      },
+    ]);
+
+    return res.json({
+      success: true,
+      email,
+      level: tier,
+      renewDate: renewDate.toISOString().split('T')[0],
     });
   } catch (err) {
-    console.error('[Verify Code] ❌ Error fetching membership:', err);
-    return res.status(500).json({ success: false, error: 'Server error' });
+    console.error('[Verify Code] ❌ Fourthwall fetch failed:', err);
+    return res.status(500).json({ success: false, error: 'Failed to query Fourthwall API' });
   }
 });
+
+
 
