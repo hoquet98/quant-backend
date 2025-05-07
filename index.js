@@ -106,27 +106,30 @@ app.get('/check-membership', async (req, res) => {
 
 app.post('/send-code', async (req, res) => {
   const { email } = req.body;
+  console.log('[Send Code] ✉️ Requested for:', email);
 
   if (!email || !email.includes('@')) {
+    console.log('[Send Code] ❌ Invalid email input:', email);
     return res.status(400).json({ success: false, error: 'Invalid email' });
   }
 
-  const code = Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit code
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
 
   try {
     const result = await sendVerificationEmail(email, code);
     if (!result.success) throw new Error(result.error);
 
-    // You can store this in memory or Supabase — for now use in-memory map
     if (!global.codes) global.codes = {};
     global.codes[email.toLowerCase()] = {
       code,
-      expires: Date.now() + 15 * 60 * 1000 // 15 minutes
+      expires: Date.now() + 15 * 60 * 1000,
     };
 
+    console.log('[Send Code] ✅ Sent code to:', email);
     res.json({ success: true });
   } catch (err) {
-    console.error('[Send Code] ❌', err);
+    console.error('[Send Code] ❌ Server error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
