@@ -216,7 +216,7 @@ app.post('/verify-code', async (req, res) => {
         active: true,
         renewal_date: renewDate.toISOString().split('T')[0],
         install_id: installId ?? null, // ← ✅
-      });
+      }, { onConflict: 'email' }); // ← ✅
 
       return res.json({
         success: true,
@@ -240,7 +240,7 @@ app.post('/verify-code', async (req, res) => {
     active: true,
     renewal_date: null,
     install_id: installId ?? null, // ← ✅
-  });
+  }, { onConflict: 'email' }); // ← ✅
   if (insertError) {
     console.error('[Verify Code] ❌ Supabase insert error:', insertError);
   }
