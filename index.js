@@ -133,3 +133,30 @@ app.post('/send-code', async (req, res) => {
   }
 });
 
+app.post('/verify-code', async (req, res) => {
+  const { email, code } = req.body;
+  if (!email || !code) {
+    return res.status(400).json({ success: false, error: 'Missing email or code' });
+  }
+
+  const codes = global.codes || {};
+  const record = codes[email.toLowerCase()];
+
+  if (!record) {
+    return res.status(400).json({ success: false, error: 'No code found for this email' });
+  }
+
+  if (Date.now() > record.expires) {
+    delete codes[email.toLowerCase()];
+    return res.status(400).json({ success: false, error: 'Code has expired' });
+  }
+
+  if (record.code !== code) {
+    return res.status(400).json({ success: false, error: 'Invalid code' });
+  }
+
+  // Optionally mark user as verified here (e.g. in Supabase)
+  console.log(`[Verify Code] ✅ Verified ${email}`);
+
+  return res.json({ success: true });
+});
