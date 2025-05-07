@@ -41,6 +41,7 @@ app.listen(port, () => {
 app.post('/webhook/fourthwall', async (req, res) => {
   const { type, data } = req.body;
   const email = data?.customer?.email?.toLowerCase();
+  console.log('[Webhook] 🔍 Full payload:', JSON.stringify(req.body, null, 2));
 
   if (!email) return res.sendStatus(400);
 
