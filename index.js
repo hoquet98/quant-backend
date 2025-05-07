@@ -8,6 +8,8 @@ import supabase from './supabaseClient.js';
 import { sendVerificationEmail } from './sendVerificationEmail.js';
 
 const MEMBERS_FILE = path.resolve('members.json');
+// Add this at the top of your index.js
+const verificationCodes = {};
 
 function loadMembers() {
   if (!fs.existsSync(MEMBERS_FILE)) return {};
