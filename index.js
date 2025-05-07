@@ -107,7 +107,7 @@ app.post('/send-code', async (req, res) => {
 
   try {
     // Store in Supabase `verification` table
-    const { error } = await supabase.from('verification').insert([
+    const { error } = await supabase.from('verifications').insert([
       {
         email: lowerEmail,
         code,
@@ -149,7 +149,7 @@ app.post('/verify-code', async (req, res) => {
 
   // Step 1: Validate verification code
   const { data: verification, error: verificationError } = await supabase
-    .from('verification')
+    .from('verifications')
     .select('code, expires')
     .eq('email', lowerEmail)
     .order('created_at', { ascending: false })
@@ -161,7 +161,7 @@ app.post('/verify-code', async (req, res) => {
   }
 
   const isExpired = new Date() > new Date(verification.expires);
-  if (verification.code !== code || isExpired) {
+  if (verifications.code !== code || isExpired) {
     return res.status(401).json({ success: false, error: 'Invalid or expired code' });
   }
 
