@@ -214,7 +214,7 @@ app.post('/verify-code', async (req, res) => {
         email: lowerEmail,
         tier,
         active: true,
-        renew_date: renewDate.toISOString().split('T')[0],
+        renewal_date: renewDate.toISOString().split('T')[0],
       });
 
       return res.json({
@@ -237,7 +237,7 @@ app.post('/verify-code', async (req, res) => {
     email: lowerEmail,
     tier: 'Free',
     active: true,
-    renew_date: null,
+    renewal_date: null,
   });
   if (insertError) {
     console.error('[Verify Code] ❌ Supabase insert error:', insertError);
