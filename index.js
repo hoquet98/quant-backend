@@ -140,7 +140,7 @@ app.post('/send-code', async (req, res) => {
 
 
 app.post('/verify-code', async (req, res) => {
-  const { email, code } = req.body;
+  const { email, code, installId } = req.body;
   if (!email || !code) {
     return res.status(400).json({ success: false, error: 'Missing email or code' });
   }
@@ -215,6 +215,7 @@ app.post('/verify-code', async (req, res) => {
         tier,
         active: true,
         renewal_date: renewDate.toISOString().split('T')[0],
+        install_id: installId ?? null, // ← ✅
       });
 
       return res.json({
@@ -238,6 +239,7 @@ app.post('/verify-code', async (req, res) => {
     tier: 'Free',
     active: true,
     renewal_date: null,
+    install_id: installId ?? null, // ← ✅
   });
   if (insertError) {
     console.error('[Verify Code] ❌ Supabase insert error:', insertError);
