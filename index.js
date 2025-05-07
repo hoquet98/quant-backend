@@ -96,63 +96,100 @@ app.post('/webhook/fourthwall', async (req, res) => {
 
 app.post('/send-code', async (req, res) => {
   const { email } = req.body;
+
   if (!email || !email.includes('@')) {
     return res.status(400).json({ success: false, error: 'Invalid email' });
   }
 
   const code = Math.floor(100000 + Math.random() * 900000).toString();
-  verificationCodes[email.toLowerCase()] = {
-    code,
-    expiresAt: Date.now() + 15 * 60 * 1000,
-  };
+  const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 minutes
 
   try {
+    // Send verification email
     await resend.emails.send({
       from: 'Quant Trading <no-reply@quanttradingpro.com>',
       to: [email],
       subject: 'Your Quant Trading Verification Code',
       html: `<p>Your verification code is:</p><h2>${code}</h2>`
     });
-    console.log('[Send Code] ✅ Sent code to:', email);
+
+    // Store in Supabase
+    const { error } = await supabase.from('verification_codes').insert([
+      {
+        email: email.toLowerCase(),
+        code,
+        expires_at: expiresAt,
+      },
+    ]);
+
+    if (error) {
+      console.error('[Send Code] ❌ Supabase insert error:', error);
+      return res.status(500).json({ success: false, error: 'Database error' });
+    }
+
+    console.log('[Send Code] ✅ Sent and stored code for:', email);
     res.json({ success: true });
+
   } catch (err) {
-    console.error('[Send Code] ❌ Error:', err);
+    console.error('[Send Code] ❌ Unexpected error:', err);
     res.status(500).json({ success: false, error: 'Failed to send code' });
   }
 });
 
+
 app.post('/verify-code', async (req, res) => {
   const { email, code } = req.body;
-  const entry = verificationCodes[email.toLowerCase()];
+  const lowerEmail = email?.toLowerCase();
 
-  if (!entry || entry.code !== code || Date.now() > entry.expiresAt) {
+  if (!lowerEmail || !code) {
+    return res.status(400).json({ success: false, error: 'Missing email or code' });
+  }
+
+  // Step 1: Validate against Supabase verification_codes table
+  const { data: verification, error: codeErr } = await supabase
+    .from('verification_codes')
+    .select('code, expires')
+    .eq('email', lowerEmail)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single();
+
+  if (codeErr || !verification) {
+    return res.status(401).json({ success: false, error: 'Code not found' });
+  }
+
+  const now = new Date();
+  const isExpired = new Date(verification.expires) < now;
+  if (isExpired || verification.code !== code) {
     return res.status(401).json({ success: false, error: 'Invalid or expired code' });
   }
 
-  console.log(`[Verify Code] 🔑 Verifying ${email}`);
+  console.log(`[Verify Code] ✅ Code verified for ${lowerEmail}`);
 
-  const { data: member, error } = await supabase
+  // Step 2: Check membership table
+  const { data: member, error: memberErr } = await supabase
     .from('members')
     .select('tier, renew_date')
-    .eq('email', email)
+    .eq('email', lowerEmail)
     .single();
 
   if (member) {
     return res.json({
       success: true,
-      email,
+      email: lowerEmail,
       level: member.tier,
       renewDate: member.renew_date,
     });
   }
 
+  // Step 3: Call Fourthwall API
   const username = process.env.FOURTHWALL_API_USER;
   const password = process.env.FOURTHWALL_API_PASS;
   const authHeader = 'Basic ' + Buffer.from(`${username}:${password}`).toString('base64');
 
   try {
     const fwRes = await fetch(
-      `https://api.fourthwall.com/open-api/v1/customers?email=${encodeURIComponent(email)}`,
+      `https://api.fourthwall.com/open-api/v1/customers?email=${encodeURIComponent(lowerEmail)}`,
       {
         headers: {
           Authorization: authHeader,
@@ -162,36 +199,59 @@ app.post('/verify-code', async (req, res) => {
     );
 
     const fwData = await fwRes.json();
-    if (!fwData?.data || fwData.data.length === 0) {
-      return res.status(404).json({ success: false, error: 'User not found in Fourthwall' });
+
+    if (fwData?.data?.length > 0) {
+      const customer = fwData.data[0];
+      const tier = customer.subscription?.variant?.tierName || 'Pro';
+      const interval = customer.subscription?.variant?.interval || 'MONTHLY';
+      const createdAt = new Date(customer.subscription?.createdAt || Date.now());
+      const renewDate = new Date(createdAt);
+
+      if (interval === 'MONTHLY') renewDate.setMonth(renewDate.getMonth() + 1);
+      if (interval === 'YEARLY') renewDate.setFullYear(renewDate.getFullYear() + 1);
+
+      await supabase.from('members').upsert({
+        email: lowerEmail,
+        tier,
+        active: true,
+        renew_date: renewDate.toISOString().split('T')[0],
+      });
+
+      return res.json({
+        success: true,
+        email: lowerEmail,
+        level: tier,
+        renewDate: renewDate.toISOString().split('T')[0],
+      });
     }
-
-    const customer = fwData.data[0];
-    const tier = customer.subscription?.variant?.tierName || 'Pro';
-    const interval = customer.subscription?.variant?.interval || 'MONTHLY';
-    const createdAt = new Date(customer.subscription?.createdAt || Date.now());
-    const renewDate = new Date(createdAt);
-    if (interval === 'MONTHLY') renewDate.setMonth(renewDate.getMonth() + 1);
-    else if (interval === 'YEARLY') renewDate.setFullYear(renewDate.getFullYear() + 1);
-
-    await supabase.from('members').upsert({
-      email,
-      tier,
-      active: true,
-      renew_date: renewDate.toISOString().split('T')[0],
-    });
-
-    return res.json({
-      success: true,
-      email,
-      level: tier,
-      renewDate: renewDate.toISOString().split('T')[0],
-    });
   } catch (err) {
-    console.error('[Verify Code] ❌ Fourthwall fetch failed:', err);
-    return res.status(500).json({ success: false, error: 'Fourthwall API error' });
+    console.error('[Verify Code] 🔌 Fourthwall API failed:', err.message);
   }
+
+  // Step 4: Fallback — insert as Free member
+  console.log('[Verify Code] ⚠️ No match in Fourthwall — saving as Free tier');
+
+  const today = new Date().toISOString().split('T')[0];
+  const { error: insertErr } = await supabase.from('members').insert({
+    email: lowerEmail,
+    tier: 'Free',
+    active: true,
+    renew_date: today,
+  });
+
+  if (insertErr) {
+    console.error('[Verify Code] ❌ Failed to insert free member:', insertErr.message);
+    return res.status(500).json({ success: false, error: 'Could not save free member' });
+  }
+
+  return res.json({
+    success: true,
+    email: lowerEmail,
+    level: 'Free',
+    renewDate: today,
+  });
 });
+
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
