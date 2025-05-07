@@ -161,7 +161,7 @@ app.post('/verify-code', async (req, res) => {
   }
 
   const isExpired = new Date() > new Date(verification.expires);
-  if (verifications.code !== code || isExpired) {
+  if (verification.code !== code || isExpired) {
     return res.status(401).json({ success: false, error: 'Invalid or expired code' });
   }
 
