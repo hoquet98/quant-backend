@@ -233,12 +233,22 @@ app.post('/verify-code', async (req, res) => {
   const fallbackRenewDate = new Date();
   fallbackRenewDate.setFullYear(fallbackRenewDate.getFullYear() + 1);
 
-  await supabase.from('members').upsert({
+  const { error: insertError } = await supabase.from('members').upsert({
     email: lowerEmail,
-    tier: freeTier,
+    tier: 'Free',
     active: true,
-    renew_date: fallbackRenewDate.toISOString().split('T')[0],
+    renew_date: null,
   });
+  if (insertError) {
+    console.error('[Verify Code] ❌ Supabase insert error:', insertError);
+  }
+
+  // await supabase.from('members').upsert({
+  //   email: lowerEmail,
+  //   tier: freeTier,
+  //   active: true,
+  //   renew_date: fallbackRenewDate.toISOString().split('T')[0],
+  // });
 
   return res.json({
     success: true,
