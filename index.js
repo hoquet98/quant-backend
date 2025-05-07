@@ -155,8 +155,30 @@ app.post('/verify-code', async (req, res) => {
     return res.status(400).json({ success: false, error: 'Invalid code' });
   }
 
-  // Optionally mark user as verified here (e.g. in Supabase)
-  console.log(`[Verify Code] ✅ Verified ${email}`);
+  // ✅ Lookup membership info from Supabase
+  try {
+    const { data: member, error } = await supabase
+      .from('members')
+      .select('tier, renew_date')
+      .eq('email', email.toLowerCase())
+      .single();
 
-  return res.json({ success: true });
+    if (error || !member) {
+      console.error('[Verify Code] ❌ Supabase error:', error);
+      return res.status(200).json({ success: true, email, tier: 'Pro', renew_date: 'Unknown' }); // fallback
+    }
+
+    console.log(`[Verify Code] ✅ Verified ${email} — Tier: ${member.tier}, Renew: ${member.renew_date}`);
+
+    return res.json({
+      success: true,
+      email,
+      tier: member.tier,
+      renew_date: member.renew_date,
+    });
+  } catch (err) {
+    console.error('[Verify Code] ❌ Error fetching membership:', err);
+    return res.status(500).json({ success: false, error: 'Server error' });
+  }
 });
+
