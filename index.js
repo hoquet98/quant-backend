@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import supabase from './supabaseClient.js';
+import { sendVerificationEmail } from './sendVerificationEmail.js';
 
 const MEMBERS_FILE = path.resolve('members.json');
 
@@ -100,5 +101,32 @@ app.get('/check-membership', async (req, res) => {
   } catch (err) {
     console.error('❌ Error checking membership:', err.message);
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.post('/send-code', async (req, res) => {
+  const { email } = req.body;
+
+  if (!email || !email.includes('@')) {
+    return res.status(400).json({ success: false, error: 'Invalid email' });
+  }
+
+  const code = Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit code
+
+  try {
+    const result = await sendVerificationEmail(email, code);
+    if (!result.success) throw new Error(result.error);
+
+    // You can store this in memory or Supabase — for now use in-memory map
+    if (!global.codes) global.codes = {};
+    global.codes[email.toLowerCase()] = {
+      code,
+      expires: Date.now() + 15 * 60 * 1000 // 15 minutes
+    };
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[Send Code] ❌', err);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
