@@ -81,7 +81,7 @@ app.post('/webhook/fourthwall', async (req, res) => {
       email,
       tier: tierId,
       active: isActive,
-      renew_date: formattedRenewDate,
+      renewal_date: formattedRenewDate,
     },
     { onConflict: 'email' }
   );
