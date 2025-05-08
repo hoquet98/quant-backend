@@ -6,7 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import { createClient } from '@supabase/supabase-js';
 import { Resend } from 'resend';
-import { getAndSyncMembers } from './getAndSyncMembers.js';
+import { getAndSyncMembers } from './getAndSynchMembers.js';
 
 dotenv.config();
 
