@@ -21,6 +21,12 @@ app.use(bodyParser.json());
 const MEMBERS_FILE = path.resolve('members.json');
 const verificationCodes = {};
 
+const tierMap = {
+  'mt_28243': 'Pro',
+  'mt_28247': 'Elite',
+  // add more as needed
+};
+
 function loadMembers() {
   if (!fs.existsSync(MEMBERS_FILE)) return {};
   return JSON.parse(fs.readFileSync(MEMBERS_FILE, 'utf-8'));
@@ -67,8 +73,8 @@ app.post('/webhook/fourthwall', async (req, res) => {
   const email = payload?.data?.email?.toLowerCase();
   const tierId = payload?.data?.subscription?.variant?.tierId || 'unknown';
   const interval = payload?.data?.subscription?.variant?.interval || 'MONTHLY';
-  const isActive = payload?.data?.subscription?.type === 'ACTIVE';
-
+  const isActive = payload?.data?.subscription?.type === 'ACTIVE' || payload?.data?.subscription?.type === 'SUSPENDED';
+  const tierName = tierMap[tierId] || 'Free';
   const renewDate = new Date();
   if (interval === 'MONTHLY') renewDate.setMonth(renewDate.getMonth() + 1);
   if (interval === 'YEARLY') renewDate.setFullYear(renewDate.getFullYear() + 1);
@@ -79,7 +85,7 @@ app.post('/webhook/fourthwall', async (req, res) => {
   const { error } = await supabase.from('members').upsert(
     {
       email,
-      tier: tierId,
+      tier: tierName,
       active: isActive,
       renewal_date: formattedRenewDate,
     },
