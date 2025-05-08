@@ -6,6 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import { createClient } from '@supabase/supabase-js';
 import { Resend } from 'resend';
+import { getAndSyncMembers } from './getAndSyncMembers.js';
 
 dotenv.config();
 
@@ -144,7 +145,6 @@ app.post('/send-code', async (req, res) => {
 });
 
 
-
 app.post('/verify-code', async (req, res) => {
   const { email, code, installId } = req.body;
   if (!email || !code) {
@@ -173,90 +173,48 @@ app.post('/verify-code', async (req, res) => {
 
   console.log(`[Verify Code] 🔑 Code matched for ${lowerEmail}`);
 
-  // Step 2: Check membership in Supabase
-  const { data: member, error: memberError } = await supabase
+  // Step 2: Sync members from Fourthwall → Supabase
+  await getAndSyncMembers();
+
+  // Step 3: Try again to find member in Supabase
+  const { data: syncedMember, error: syncedError } = await supabase
     .from('members')
-    .select('tier, renew_date')
+    .select('tier, renewal_date')
     .eq('email', lowerEmail)
     .single();
 
-  if (member) {
+  if (syncedMember) {
+    // Track install ID
+    try {
+      await supabase.from('member_installs').upsert({
+        email: lowerEmail,
+        install_id: installId ?? null,
+      });
+    } catch (err) {
+      console.warn('[Verify Code] ⚠️ Could not insert install_id:', err.message);
+    }
+
     return res.json({
       success: true,
       email: lowerEmail,
-      level: member.tier,
-      renewDate: member.renew_date,
+      level: syncedMember.tier,
+      renewDate: syncedMember.renewal_date,
     });
   }
 
-  // Step 3: Try to find paid user via Fourthwall API
-  const username = process.env.FOURTHWALL_API_USER;
-  const password = process.env.FOURTHWALL_API_PASS;
-  const authHeader = 'Basic ' + Buffer.from(`${username}:${password}`).toString('base64');
-
-  try {
-    const fwRes = await fetch(
-      `https://api.fourthwall.com/open-api/v1/customers?email=${encodeURIComponent(lowerEmail)}`,
-      {
-        headers: {
-          Authorization: authHeader,
-          'Content-Type': 'application/json',
-        },
-      }
-    );
-    const fwData = await fwRes.json();
-
-    if (fwData?.data?.length > 0) {
-      const customer = fwData.data[0];
-      const tier = customer.subscription?.variant?.tierName || 'Pro';
-      const interval = customer.subscription?.variant?.interval || 'MONTHLY';
-      const createdAt = new Date(customer.subscription?.createdAt || Date.now());
-
-      const renewDate = new Date(createdAt);
-      if (interval === 'MONTHLY') renewDate.setMonth(renewDate.getMonth() + 1);
-      else if (interval === 'YEARLY') renewDate.setFullYear(renewDate.getFullYear() + 1);
-
-      await supabase.from('members').upsert({
-        email: lowerEmail,
-        tier,
-        active: true,
-        renewal_date: renewDate.toISOString().split('T')[0],
-        install_id: installId ?? null, // ← ✅
-      }, { onConflict: 'email' }); // ← ✅
-
-      try {
-        await supabase.from('member_installs').upsert({
-          email: lowerEmail,
-          install_id: installId ?? null, // ← ✅
-        });
-      } catch (err) {
-        console.warn('[Verify Code] ⚠️ Could not insert install_id:', err.message);
-      }
-      
-
-      return res.json({
-        success: true,
-        email: lowerEmail,
-        level: tier,
-        renewDate: renewDate.toISOString().split('T')[0],
-      });
-    }
-  } catch (err) {
-    console.warn('[Verify Code] ⚠️ Fourthwall fallback failed:', err.message);
-  }
-
-  // Step 4: Insert as Free Member fallback
+  // Step 4: Fallback insert as Free Member
   const freeTier = 'Free';
   const fallbackRenewDate = new Date();
   fallbackRenewDate.setFullYear(fallbackRenewDate.getFullYear() + 1);
 
   const { error: insertError } = await supabase.from('members').upsert({
     email: lowerEmail,
-    tier: 'Free',
+    tier: freeTier,
     active: true,
     renewal_date: null,
-    install_id: installId ?? null, // ← ✅
-  }, { onConflict: 'email' }); // ← ✅
+    install_id: installId ?? null,
+  }, { onConflict: 'email' });
+
   if (insertError) {
     console.error('[Verify Code] ❌ Supabase insert error:', insertError);
   }
@@ -264,18 +222,11 @@ app.post('/verify-code', async (req, res) => {
   try {
     await supabase.from('member_installs').upsert({
       email: lowerEmail,
-      install_id: installId ?? null, // ← ✅
+      install_id: installId ?? null,
     });
   } catch (err) {
     console.warn('[Verify Code] ⚠️ Could not insert install_id:', err.message);
   }
-  
-  // await supabase.from('members').upsert({
-  //   email: lowerEmail,
-  //   tier: freeTier,
-  //   active: true,
-  //   renew_date: fallbackRenewDate.toISOString().split('T')[0],
-  // });
 
   return res.json({
     success: true,
@@ -284,6 +235,7 @@ app.post('/verify-code', async (req, res) => {
     renewDate: fallbackRenewDate.toISOString().split('T')[0],
   });
 });
+
 
 
 
