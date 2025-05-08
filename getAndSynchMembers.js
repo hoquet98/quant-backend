@@ -1,6 +1,5 @@
 import dotenv from 'dotenv';
 import fetch from 'node-fetch';
-import zlib from 'zlib';
 import { createClient } from '@supabase/supabase-js';
 
 dotenv.config();
@@ -13,7 +12,7 @@ const password = process.env.FOURTHWALL_API_PASS;
 const tierMap = {
   'mt_28243': 'Pro',
   'mt_28247': 'Elite',
-  // Add more tierId mappings here
+  // Add more tierId mappings if needed
 };
 
 export async function getAndSyncMembers() {
@@ -23,16 +22,17 @@ export async function getAndSyncMembers() {
     const res = await fetch('https://api.fourthwall.com/open-api/v1.0/memberships/members', {
       method: 'GET',
       headers: {
-        'Authorization': authHeader,
+        Authorization: authHeader,
         'Content-Type': 'application/json',
+        // Don't include Accept-Encoding
       },
     });
 
-    const buffer = await res.buffer();
-    //const json = JSON.parse(zlib.gunzipSync(buffer).toString('utf-8'));
-    const json = await res.json(); // Let node-fetch handle encoding automatically
+    if (!res.ok) {
+      throw new Error(`HTTP error! Status: ${res.status}`);
+    }
 
-
+    const json = await res.json(); // ✅ Only parse once
     const members = json.results.map(m => ({
       email: m.email?.toLowerCase() ?? 'unknown',
       tier: tierMap[m.subscription?.variant?.tierId] ?? 'Free',
@@ -47,7 +47,7 @@ export async function getAndSyncMembers() {
           email: member.email,
           tier: member.tier,
           active: member.active,
-          renewal_date: null, // You could calculate this if you want
+          renewal_date: null,
         },
         { onConflict: 'email' }
       );
@@ -59,7 +59,6 @@ export async function getAndSyncMembers() {
       }
     }
 
-    console.log(`[Fourthwall] ✅ Synced ${members.length} members`);
     return members;
   } catch (err) {
     console.error('[Fourthwall] ❌ Failed to fetch or parse members:', err.message);
