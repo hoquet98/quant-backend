@@ -221,7 +221,7 @@ app.post('/verify-code', async (req, res) => {
       try {
         await supabase.from('member_installs').upsert({
           email: lowerEmail,
-          install_id,
+          install_id: installId ?? null, // ← ✅
         });
       } catch (err) {
         console.warn('[Verify Code] ⚠️ Could not insert install_id:', err.message);
@@ -258,7 +258,7 @@ app.post('/verify-code', async (req, res) => {
   try {
     await supabase.from('member_installs').upsert({
       email: lowerEmail,
-      install_id,
+      install_id: installId ?? null, // ← ✅
     });
   } catch (err) {
     console.warn('[Verify Code] ⚠️ Could not insert install_id:', err.message);
