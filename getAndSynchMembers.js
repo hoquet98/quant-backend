@@ -25,12 +25,13 @@ export async function getAndSyncMembers() {
       headers: {
         'Authorization': authHeader,
         'Content-Type': 'application/json',
-        'Accept-Encoding': 'gzip',
       },
     });
 
     const buffer = await res.buffer();
-    const json = JSON.parse(zlib.gunzipSync(buffer).toString('utf-8'));
+    //const json = JSON.parse(zlib.gunzipSync(buffer).toString('utf-8'));
+    const json = await res.json(); // Let node-fetch handle encoding automatically
+
 
     const members = json.results.map(m => ({
       email: m.email?.toLowerCase() ?? 'unknown',
