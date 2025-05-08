@@ -13,7 +13,7 @@ const password = process.env.FOURTHWALL_API_PASS;
 const tierMap = {
   'mt_28243': 'Pro',
   'mt_28247': 'Elite',
-  // Add more tierId mappings if needed
+  // Add more tierId mappings here
 };
 
 export async function getAndSyncMembers() {
@@ -46,7 +46,7 @@ export async function getAndSyncMembers() {
           email: member.email,
           tier: member.tier,
           active: member.active,
-          renewal_date: null, // Optional: calculate from interval if desired
+          renewal_date: null, // You could calculate this if you want
         },
         { onConflict: 'email' }
       );
@@ -58,6 +58,7 @@ export async function getAndSyncMembers() {
       }
     }
 
+    console.log(`[Fourthwall] ✅ Synced ${members.length} members`);
     return members;
   } catch (err) {
     console.error('[Fourthwall] ❌ Failed to fetch or parse members:', err.message);
