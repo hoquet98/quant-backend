@@ -198,6 +198,13 @@ app.post('/verify-code', async (req, res) => {
     } catch (err) {
       console.warn('[Verify Code] ⚠️ Could not insert install_id:', err.message);
     }
+    console.log('[Verify Code] ✅ Returning verified member info:', {
+      email: lowerEmail,
+      level: syncedMember.tier,
+      renewDate: syncedMember.renewal_date,
+      memberId: syncedMember.member_id,
+      memberNickname: syncedMember.nickname,
+    });
 
     return res.json({
       success: true,
