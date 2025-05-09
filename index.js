@@ -179,13 +179,12 @@ app.post('/verify-code', async (req, res) => {
 
   console.log(`[Verify Code] 🔑 Code matched for ${lowerEmail}`);
 
-  // Step 2: Sync members from Fourthwall → Supabase
-  //await getAndSyncMembers(); This is done for us automatically from uptimeRobot. https://uptimerobot.com/
+  // Step 2: Skip syncing, handled by UptimeRobot
 
-  // Step 3: Try again to find member in Supabase
+  // Step 3: Get member info from Supabase
   const { data: syncedMember, error: syncedError } = await supabase
     .from('members')
-    .select('tier, renewal_date')
+    .select('tier, renewal_date, member_id, nickname')
     .eq('email', lowerEmail)
     .single();
 
@@ -205,6 +204,8 @@ app.post('/verify-code', async (req, res) => {
       email: lowerEmail,
       level: syncedMember.tier,
       renewDate: syncedMember.renewal_date,
+      memberId: syncedMember.member_id ?? null,
+      memberNickname: syncedMember.nickname ?? null,
     });
   }
 
@@ -239,8 +240,11 @@ app.post('/verify-code', async (req, res) => {
     email: lowerEmail,
     level: freeTier,
     renewDate: fallbackRenewDate.toISOString().split('T')[0],
+    memberId: null,
+    memberNickname: null,
   });
 });
+
 
 
 
@@ -256,5 +260,43 @@ app.get('/sync-members', async (req, res) => {
   } catch (error) {
     console.error('Error syncing members:', error);
     res.status(500).send('Error syncing members.');
+  }
+});
+
+
+
+app.post('/api/verify-membership', async (req, res) => {
+  const { memberId } = req.body;
+  if (!memberId) return res.status(400).json({ success: false, error: 'Missing memberId' });
+
+  try {
+    const authHeader = 'Basic ' + Buffer.from(`${process.env.FOURTHWALL_API_USER}:${process.env.FOURTHWALL_API_PASS}`).toString('base64');
+    const url = `https://api.fourthwall.com/open-api/v1.0/memberships/members/${memberId}`;
+    const fwRes = await fetch(url, {
+      headers: {
+        Authorization: authHeader,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!fwRes.ok) {
+      return res.status(500).json({ success: false, error: `Fourthwall error: ${fwRes.status}` });
+    }
+
+    const member = await fwRes.json();
+
+    const tierId = member.subscription?.variant?.tierId ?? 'unknown';
+    const tier = tierMap[tierId] ?? 'Free';
+    const isActive = ['ACTIVE', 'SUSPENDED'].includes(member.subscription?.type);
+
+    return res.json({
+      success: true,
+      active: isActive,
+      tier,
+      nickname: member.nickname ?? null
+    });
+  } catch (err) {
+    console.error('[Verify Membership] ❌', err);
+    return res.status(500).json({ success: false, error: 'Server error' });
   }
 });
