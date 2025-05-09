@@ -180,7 +180,7 @@ app.post('/verify-code', async (req, res) => {
   console.log(`[Verify Code] 🔑 Code matched for ${lowerEmail}`);
 
   // Step 2: Sync members from Fourthwall → Supabase
-  await getAndSyncMembers();
+  //await getAndSyncMembers(); This is done for us automatically from uptimeRobot. https://uptimerobot.com/
 
   // Step 3: Try again to find member in Supabase
   const { data: syncedMember, error: syncedError } = await supabase
