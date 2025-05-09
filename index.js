@@ -74,18 +74,23 @@ app.post('/webhook/fourthwall', async (req, res) => {
   const email = payload?.data?.email?.toLowerCase();
   const tierId = payload?.data?.subscription?.variant?.tierId || 'unknown';
   const interval = payload?.data?.subscription?.variant?.interval || 'MONTHLY';
-  const isActive = payload?.data?.subscription?.type === 'ACTIVE' || payload?.data?.subscription?.type === 'SUSPENDED';
+  const isActive = ['ACTIVE', 'SUSPENDED'].includes(payload?.data?.subscription?.type);
   const tierName = tierMap[tierId] || 'Free';
   const renewDate = new Date();
   if (interval === 'MONTHLY') renewDate.setMonth(renewDate.getMonth() + 1);
   if (interval === 'YEARLY') renewDate.setFullYear(renewDate.getFullYear() + 1);
   const formattedRenewDate = renewDate.toISOString().split('T')[0];
 
+  const nickname = payload?.data?.nickname || null;
+  const memberId = parseInt(payload?.data?.id, 10) || null;
+
   if (!email) return res.status(400).send('Missing email');
 
   const { error } = await supabase.from('members').upsert(
     {
       email,
+      member_id: memberId,
+      nickname: nickname,
       tier: tierName,
       active: isActive,
       renewal_date: formattedRenewDate,
@@ -100,6 +105,7 @@ app.post('/webhook/fourthwall', async (req, res) => {
 
   res.sendStatus(200);
 });
+
 
 app.post('/send-code', async (req, res) => {
   const { email } = req.body;
@@ -241,4 +247,14 @@ app.post('/verify-code', async (req, res) => {
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
+});
+
+app.get('/sync-members', async (req, res) => {
+  try {
+    await getAndSyncMembers();
+    res.status(200).send('Members synced successfully.');
+  } catch (error) {
+    console.error('Error syncing members:', error);
+    res.status(500).send('Error syncing members.');
+  }
 });

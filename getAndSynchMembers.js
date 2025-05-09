@@ -24,7 +24,6 @@ export async function getAndSyncMembers() {
       headers: {
         Authorization: authHeader,
         'Content-Type': 'application/json',
-        // Don't include Accept-Encoding
       },
     });
 
@@ -32,22 +31,25 @@ export async function getAndSyncMembers() {
       throw new Error(`HTTP error! Status: ${res.status}`);
     }
 
-    const json = await res.json(); // ✅ Only parse once
+    const json = await res.json();
+
     const members = json.results.map(m => ({
       email: m.email?.toLowerCase() ?? 'unknown',
+      member_id: parseInt(m.id, 10) || null,
+      nickname: m.nickname || null,
       tier: tierMap[m.subscription?.variant?.tierId] ?? 'Free',
       active: ['ACTIVE', 'SUSPENDED'].includes(m.subscription?.type),
-      interval: m.subscription?.variant?.interval ?? null,
-      amount: m.subscription?.variant?.amount?.value ?? null,
     }));
 
     for (const member of members) {
       const { error } = await supabase.from('members').upsert(
         {
           email: member.email,
+          member_id: member.member_id,
+          nickname: member.nickname,
           tier: member.tier,
           active: member.active,
-          renewal_date: null,
+          // ❌ Do NOT include renewal_date here — we want to preserve webhook values
         },
         { onConflict: 'email' }
       );
