@@ -296,6 +296,14 @@ app.post('/api/verify-membership', async (req, res) => {
     const tier = tierMap[tierId] ?? 'Free';
     const isActive = ['ACTIVE', 'SUSPENDED'].includes(member.subscription?.type);
 
+        // ✅ Add debug log here
+        console.log(`[Verify Membership] ✅ Verified member:
+      ID: ${member.id}
+      Name: ${member.nickname}
+      Email: ${member.email}
+      Tier: ${tier}
+      Active: ${isActive}`);
+
     return res.json({
       success: true,
       active: isActive,

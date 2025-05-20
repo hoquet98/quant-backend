@@ -41,6 +41,8 @@ export async function getAndSyncMembers() {
       active: ['ACTIVE', 'SUSPENDED'].includes(m.subscription?.type),
     }));
 
+    let successCount = 0;
+
     for (const member of members) {
       const { error } = await supabase.from('members').upsert(
         {
@@ -57,13 +59,15 @@ export async function getAndSyncMembers() {
       if (error) {
         console.error(`[Supabase] ❌ Failed to upsert ${member.email}:`, error);
       } else {
-        console.log(`[Supabase] ✅ Synced member: ${member.email}`);
+        successCount++;
       }
     }
 
+    console.log(`[Supabase] ✅ Synced ${successCount} members`);
     return members;
   } catch (err) {
     console.error('[Fourthwall] ❌ Failed to fetch or parse members:', err.message);
     return [];
   }
 }
+
