@@ -183,17 +183,16 @@ app.post('/verify-code', async (req, res) => {
     if (memberResult.rows.length > 0) {
       const syncedMember = memberResult.rows[0];
 
-      // Track install ID
-      try {
-        await pool.query(
-          `INSERT INTO member_installs (email, install_id)
-           VALUES ($1, $2)
-           ON CONFLICT (email)
-           DO UPDATE SET install_id = EXCLUDED.install_id`,
-          [lowerEmail, installId ?? null]
-        );
-      } catch (err) {
-        console.warn('[Verify Code] ⚠️ Could not insert install_id:', err.message);
+      // Track install ID (logs all installs without duplicate checking)
+      if (installId) {
+        try {
+          await pool.query(
+            `INSERT INTO member_installs (email, install_id) VALUES ($1, $2)`,
+            [lowerEmail, installId]
+          );
+        } catch (err) {
+          console.warn('[Verify Code] ⚠️ Could not insert install_id:', err.message);
+        }
       }
 
       console.log('[Verify Code] ✅ Returning verified member info:', {
@@ -230,16 +229,15 @@ app.post('/verify-code', async (req, res) => {
       [lowerEmail, freeTier, true, null]
     );
 
-    try {
-      await pool.query(
-        `INSERT INTO member_installs (email, install_id)
-         VALUES ($1, $2)
-         ON CONFLICT (email)
-         DO UPDATE SET install_id = EXCLUDED.install_id`,
-        [lowerEmail, installId ?? null]
-      );
-    } catch (err) {
-      console.warn('[Verify Code] ⚠️ Could not insert install_id:', err.message);
+    if (installId) {
+      try {
+        await pool.query(
+          `INSERT INTO member_installs (email, install_id) VALUES ($1, $2)`,
+          [lowerEmail, installId]
+        );
+      } catch (err) {
+        console.warn('[Verify Code] ⚠️ Could not insert install_id:', err.message);
+      }
     }
 
     return res.json({
