@@ -4,14 +4,13 @@ import bodyParser from 'body-parser';
 import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
-import { createClient } from '@supabase/supabase-js';
 import { Resend } from 'resend';
 import { getAndSyncMembers } from './getAndSynchMembers.js';
+import pool from './supabaseClient.js';
 
 dotenv.config();
 
 const resend = new Resend(process.env.RESEND_API_KEY);
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
 const app = express();
 const port = process.env.PORT || 8080;
@@ -47,19 +46,18 @@ app.get('/check-membership', async (req, res) => {
   if (!email) return res.status(400).json({ error: 'Missing email parameter' });
 
   try {
-    const { data, error } = await supabase
-      .from('members')
-      .select('tier, active')
-      .eq('email', email)
-      .single();
+    const result = await pool.query(
+      'SELECT tier, active FROM members WHERE email = $1',
+      [email]
+    );
 
-    if (error || !data) {
+    if (result.rows.length === 0) {
       return res.status(404).json({ active: false, tier: null });
     }
 
     return res.json({
-      active: data.active,
-      tier: data.tier
+      active: result.rows[0].active,
+      tier: result.rows[0].tier
     });
   } catch (err) {
     console.error('❌ Error checking membership:', err.message);
@@ -86,24 +84,25 @@ app.post('/webhook/fourthwall', async (req, res) => {
 
   if (!email) return res.status(400).send('Missing email');
 
-  const { error } = await supabase.from('members').upsert(
-    {
-      email,
-      member_id: memberId,
-      nickname: nickname,
-      tier: tierName,
-      active: isActive,
-      renewal_date: formattedRenewDate,
-    },
-    { onConflict: 'email' }
-  );
+  try {
+    await pool.query(
+      `INSERT INTO members (email, member_id, nickname, tier, active, renewal_date)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (email)
+       DO UPDATE SET
+         member_id = EXCLUDED.member_id,
+         nickname = EXCLUDED.nickname,
+         tier = EXCLUDED.tier,
+         active = EXCLUDED.active,
+         renewal_date = EXCLUDED.renewal_date`,
+      [email, memberId, nickname, tierName, isActive, formattedRenewDate]
+    );
 
-  if (error) {
-    console.error('[Webhook] ❌ Supabase error:', error);
-    return res.status(500).send('Supabase error');
+    res.sendStatus(200);
+  } catch (error) {
+    console.error('[Webhook] ❌ Database error:', error);
+    return res.status(500).send('Database error');
   }
-
-  res.sendStatus(200);
 });
 
 
@@ -119,20 +118,12 @@ app.post('/send-code', async (req, res) => {
   const expires = new Date(now.getTime() + 15 * 60 * 1000); // 15 minutes
 
   try {
-    // Store in Supabase `verification` table
-    const { error } = await supabase.from('verifications').insert([
-      {
-        email: lowerEmail,
-        code,
-        expires: expires.toISOString(),
-        created_at: now.toISOString(),
-      },
-    ]);
-
-    if (error) {
-      console.error('[Send Code] ❌ Supabase insert error:', error);
-      return res.status(500).json({ success: false, error: 'Supabase insert failed' });
-    }
+    // Store in database `verifications` table
+    await pool.query(
+      `INSERT INTO verifications (email, code, expires, created_at)
+       VALUES ($1, $2, $3, $4)`,
+      [lowerEmail, code, expires.toISOString(), now.toISOString()]
+    );
 
     // Send email via Resend
     await resend.emails.send({
@@ -159,97 +150,110 @@ app.post('/verify-code', async (req, res) => {
 
   const lowerEmail = email.toLowerCase();
 
-  // Step 1: Validate verification code
-  const { data: verification, error: verificationError } = await supabase
-    .from('verifications')
-    .select('code, expires')
-    .eq('email', lowerEmail)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .single();
+  try {
+    // Step 1: Validate verification code
+    const verificationResult = await pool.query(
+      `SELECT code, expires FROM verifications
+       WHERE email = $1
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [lowerEmail]
+    );
 
-  if (verificationError || !verification) {
-    return res.status(401).json({ success: false, error: 'Code not found' });
-  }
+    if (verificationResult.rows.length === 0) {
+      return res.status(401).json({ success: false, error: 'Code not found' });
+    }
 
-  const isExpired = new Date() > new Date(verification.expires);
-  if (verification.code !== code || isExpired) {
-    return res.status(401).json({ success: false, error: 'Invalid or expired code' });
-  }
+    const verification = verificationResult.rows[0];
+    const isExpired = new Date() > new Date(verification.expires);
+    if (verification.code !== code || isExpired) {
+      return res.status(401).json({ success: false, error: 'Invalid or expired code' });
+    }
 
-  console.log(`[Verify Code] 🔑 Code matched for ${lowerEmail}`);
+    console.log(`[Verify Code] 🔑 Code matched for ${lowerEmail}`);
 
-  // Step 2: Skip syncing, handled by UptimeRobot
+    // Step 2: Skip syncing, handled by UptimeRobot
 
-  // Step 3: Get member info from Supabase
-  const { data: syncedMember, error: syncedError } = await supabase
-    .from('members')
-    .select('tier, renewal_date, member_id, nickname')
-    .eq('email', lowerEmail)
-    .single();
+    // Step 3: Get member info from database
+    const memberResult = await pool.query(
+      `SELECT tier, renewal_date, member_id, nickname FROM members WHERE email = $1`,
+      [lowerEmail]
+    );
 
-  if (syncedMember) {
-    // Track install ID
-    try {
-      await supabase.from('member_installs').upsert({
+    if (memberResult.rows.length > 0) {
+      const syncedMember = memberResult.rows[0];
+
+      // Track install ID
+      try {
+        await pool.query(
+          `INSERT INTO member_installs (email, install_id)
+           VALUES ($1, $2)
+           ON CONFLICT (email)
+           DO UPDATE SET install_id = EXCLUDED.install_id`,
+          [lowerEmail, installId ?? null]
+        );
+      } catch (err) {
+        console.warn('[Verify Code] ⚠️ Could not insert install_id:', err.message);
+      }
+
+      console.log('[Verify Code] ✅ Returning verified member info:', {
         email: lowerEmail,
-        install_id: installId ?? null,
+        level: syncedMember.tier,
+        renewDate: syncedMember.renewal_date,
+        memberId: syncedMember.member_id,
+        memberNickname: syncedMember.nickname,
       });
+
+      return res.json({
+        success: true,
+        email: lowerEmail,
+        level: syncedMember.tier,
+        renewDate: syncedMember.renewal_date,
+        memberId: syncedMember.member_id ?? null,
+        memberNickname: syncedMember.nickname ?? null,
+      });
+    }
+
+    // Step 4: Fallback insert as Free Member
+    const freeTier = 'Free';
+    const fallbackRenewDate = new Date();
+    fallbackRenewDate.setFullYear(fallbackRenewDate.getFullYear() + 1);
+
+    await pool.query(
+      `INSERT INTO members (email, tier, active, renewal_date)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (email)
+       DO UPDATE SET
+         tier = EXCLUDED.tier,
+         active = EXCLUDED.active,
+         renewal_date = EXCLUDED.renewal_date`,
+      [lowerEmail, freeTier, true, null]
+    );
+
+    try {
+      await pool.query(
+        `INSERT INTO member_installs (email, install_id)
+         VALUES ($1, $2)
+         ON CONFLICT (email)
+         DO UPDATE SET install_id = EXCLUDED.install_id`,
+        [lowerEmail, installId ?? null]
+      );
     } catch (err) {
       console.warn('[Verify Code] ⚠️ Could not insert install_id:', err.message);
     }
-    console.log('[Verify Code] ✅ Returning verified member info:', {
-      email: lowerEmail,
-      level: syncedMember.tier,
-      renewDate: syncedMember.renewal_date,
-      memberId: syncedMember.member_id,
-      memberNickname: syncedMember.nickname,
-    });
 
     return res.json({
       success: true,
       email: lowerEmail,
-      level: syncedMember.tier,
-      renewDate: syncedMember.renewal_date,
-      memberId: syncedMember.member_id ?? null,
-      memberNickname: syncedMember.nickname ?? null,
-    });
-  }
-
-  // Step 4: Fallback insert as Free Member
-  const freeTier = 'Free';
-  const fallbackRenewDate = new Date();
-  fallbackRenewDate.setFullYear(fallbackRenewDate.getFullYear() + 1);
-
-  const { error: insertError } = await supabase.from('members').upsert({
-    email: lowerEmail,
-    tier: freeTier,
-    active: true,
-    renewal_date: null,
-    install_id: installId ?? null,
-  }, { onConflict: 'email' });
-
-  if (insertError) {
-    console.error('[Verify Code] ❌ Supabase insert error:', insertError);
-  }
-
-  try {
-    await supabase.from('member_installs').upsert({
-      email: lowerEmail,
-      install_id: installId ?? null,
+      level: freeTier,
+      renewDate: fallbackRenewDate.toISOString().split('T')[0],
+      memberId: null,
+      memberNickname: null,
     });
   } catch (err) {
-    console.warn('[Verify Code] ⚠️ Could not insert install_id:', err.message);
+    console.error('[Verify Code] ❌ Database error:', err);
+    return res.status(500).json({ success: false, error: 'Database error' });
   }
-
-  return res.json({
-    success: true,
-    email: lowerEmail,
-    level: freeTier,
-    renewDate: fallbackRenewDate.toISOString().split('T')[0],
-    memberId: null,
-    memberNickname: null,
-  });
 });
 
 

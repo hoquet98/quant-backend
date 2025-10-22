@@ -1,11 +1,15 @@
-// supabaseClient.js
-import { createClient } from '@supabase/supabase-js';
+// dbClient.js
+import pg from 'pg';
 import dotenv from 'dotenv';
 dotenv.config();
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+const { Pool } = pg;
 
-export default supabase;
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false
+  }
+});
+
+export default pool;

@@ -1,10 +1,8 @@
 import dotenv from 'dotenv';
 import fetch from 'node-fetch';
-import { createClient } from '@supabase/supabase-js';
+import pool from './supabaseClient.js';
 
 dotenv.config();
-
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
 const username = process.env.FOURTHWALL_API_USER;
 const password = process.env.FOURTHWALL_API_PASS;
@@ -44,26 +42,25 @@ export async function getAndSyncMembers() {
     let successCount = 0;
 
     for (const member of members) {
-      const { error } = await supabase.from('members').upsert(
-        {
-          email: member.email,
-          member_id: member.member_id,
-          nickname: member.nickname,
-          tier: member.tier,
-          active: member.active,
-          // ❌ Do NOT include renewal_date here — we want to preserve webhook values
-        },
-        { onConflict: 'email' }
-      );
-
-      if (error) {
-        console.error(`[Supabase] ❌ Failed to upsert ${member.email}:`, error);
-      } else {
+      try {
+        await pool.query(
+          `INSERT INTO members (email, member_id, nickname, tier, active)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (email)
+           DO UPDATE SET
+             member_id = EXCLUDED.member_id,
+             nickname = EXCLUDED.nickname,
+             tier = EXCLUDED.tier,
+             active = EXCLUDED.active`,
+          [member.email, member.member_id, member.nickname, member.tier, member.active]
+        );
         successCount++;
+      } catch (error) {
+        console.error(`[Database] ❌ Failed to upsert ${member.email}:`, error);
       }
     }
 
-    console.log(`[Supabase] ✅ Synced ${successCount} members`);
+    console.log(`[Database] ✅ Synced ${successCount} members`);
     return members;
   } catch (err) {
     console.error('[Fourthwall] ❌ Failed to fetch or parse members:', err.message);
