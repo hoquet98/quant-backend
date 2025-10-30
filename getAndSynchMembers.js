@@ -31,13 +31,24 @@ export async function getAndSyncMembers() {
 
     const json = await res.json();
 
-    const members = json.results.map(m => ({
-      email: m.email?.toLowerCase() ?? 'unknown',
-      member_id: parseInt(m.id, 10) || null,
-      nickname: m.nickname || null,
-      tier: tierMap[m.subscription?.variant?.tierId] ?? 'Free',
-      active: ['ACTIVE', 'SUSPENDED'].includes(m.subscription?.type),
-    }));
+    const members = json.results.map(m => {
+      const email = m.email?.toLowerCase() ?? 'unknown';
+      const subscriptionType = m.subscription?.type;
+      const isActive = ['ACTIVE', 'SUSPENDED'].includes(subscriptionType);
+
+      // Debug log for specific user
+      if (email === 'hoquet@yahoo.com') {
+        console.log(`[Sync Debug] hoquet@yahoo.com - subscription type: ${subscriptionType}, active: ${isActive}`);
+      }
+
+      return {
+        email,
+        member_id: parseInt(m.id, 10) || null,
+        nickname: m.nickname || null,
+        tier: tierMap[m.subscription?.variant?.tierId] ?? 'Free',
+        active: isActive,
+      };
+    });
 
     let successCount = 0;
 
