@@ -2,10 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import bodyParser from 'body-parser';
 import dotenv from 'dotenv';
-import fs from 'fs';
-import path from 'path';
 import { Resend } from 'resend';
-import { getAndSyncMembers } from './getAndSynchMembers.js';
 import pool from './supabaseClient.js';
 
 dotenv.config();
@@ -17,24 +14,6 @@ const port = process.env.PORT || 8080;
 
 app.use(cors());
 app.use(bodyParser.json());
-
-const MEMBERS_FILE = path.resolve('members.json');
-const verificationCodes = {};
-
-const tierMap = {
-  'mt_28243': 'Pro',
-  'mt_28247': 'Elite',
-  // add more as needed
-};
-
-function loadMembers() {
-  if (!fs.existsSync(MEMBERS_FILE)) return {};
-  return JSON.parse(fs.readFileSync(MEMBERS_FILE, 'utf-8'));
-}
-
-function saveMembers(data) {
-  fs.writeFileSync(MEMBERS_FILE, JSON.stringify(data, null, 2));
-}
 
 app.get('/', (req, res) => {
   res.send('Quant backend is running!');
@@ -64,47 +43,6 @@ app.get('/check-membership', async (req, res) => {
     res.status(500).json({ error: 'Server error' });
   }
 });
-
-app.post('/webhook/fourthwall', async (req, res) => {
-  const payload = req.body;
-  console.log('[Webhook] 🔍 Full payload:', JSON.stringify(payload, null, 2));
-
-  const email = payload?.data?.email?.toLowerCase();
-  const tierId = payload?.data?.subscription?.variant?.tierId || 'unknown';
-  const interval = payload?.data?.subscription?.variant?.interval || 'MONTHLY';
-  const isActive = ['ACTIVE', 'SUSPENDED'].includes(payload?.data?.subscription?.type);
-  const tierName = tierMap[tierId] || 'Free';
-  const renewDate = new Date();
-  if (interval === 'MONTHLY') renewDate.setMonth(renewDate.getMonth() + 1);
-  if (interval === 'YEARLY') renewDate.setFullYear(renewDate.getFullYear() + 1);
-  const formattedRenewDate = renewDate.toISOString().split('T')[0];
-
-  const nickname = payload?.data?.nickname || null;
-  const memberId = parseInt(payload?.data?.id, 10) || null;
-
-  if (!email) return res.status(400).send('Missing email');
-
-  try {
-    await pool.query(
-      `INSERT INTO members (email, member_id, nickname, tier, active, renewal_date)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (email)
-       DO UPDATE SET
-         member_id = EXCLUDED.member_id,
-         nickname = EXCLUDED.nickname,
-         tier = EXCLUDED.tier,
-         active = EXCLUDED.active,
-         renewal_date = EXCLUDED.renewal_date`,
-      [email, memberId, nickname, tierName, isActive, formattedRenewDate]
-    );
-
-    res.sendStatus(200);
-  } catch (error) {
-    console.error('[Webhook] ❌ Database error:', error);
-    return res.status(500).send('Database error');
-  }
-});
-
 
 app.post('/send-code', async (req, res) => {
   const { email } = req.body;
@@ -260,60 +198,4 @@ app.post('/verify-code', async (req, res) => {
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
-});
-
-app.get('/sync-members', async (req, res) => {
-  try {
-    await getAndSyncMembers();
-    res.status(200).send('Members synced successfully.');
-  } catch (error) {
-    console.error('Error syncing members:', error);
-    res.status(500).send('Error syncing members.');
-  }
-});
-
-
-
-app.post('/api/verify-membership', async (req, res) => {
-  const { memberId } = req.body;
-  if (!memberId) return res.status(400).json({ success: false, error: 'Missing memberId' });
-
-  try {
-    const authHeader = 'Basic ' + Buffer.from(`${process.env.FOURTHWALL_API_USER}:${process.env.FOURTHWALL_API_PASS}`).toString('base64');
-    const url = `https://api.fourthwall.com/open-api/v1.0/memberships/members/${memberId}`;
-    const fwRes = await fetch(url, {
-      headers: {
-        Authorization: authHeader,
-        'Content-Type': 'application/json'
-      }
-    });
-
-    if (!fwRes.ok) {
-      return res.status(500).json({ success: false, error: `Fourthwall error: ${fwRes.status}` });
-    }
-
-    const member = await fwRes.json();
-
-    const tierId = member.subscription?.variant?.tierId ?? 'unknown';
-    const tier = tierMap[tierId] ?? 'Free';
-    const isActive = ['ACTIVE', 'SUSPENDED'].includes(member.subscription?.type);
-
-        // ✅ Add debug log here
-        console.log(`[Verify Membership] ✅ Verified member:
-      ID: ${member.id}
-      Name: ${member.nickname}
-      Email: ${member.email}
-      Tier: ${tier}
-      Active: ${isActive}`);
-
-    return res.json({
-      success: true,
-      active: isActive,
-      tier,
-      nickname: member.nickname ?? null
-    });
-  } catch (err) {
-    console.error('[Verify Membership] ❌', err);
-    return res.status(500).json({ success: false, error: 'Server error' });
-  }
 });
